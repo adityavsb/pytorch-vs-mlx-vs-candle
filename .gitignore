@@ -1,0 +1,48 @@
+# Byte-compiled / Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Datasets and model checkpoints
+data/
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.npy
+*.npz
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE / Editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Defense-in-depth security: Credentials and secret keys
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.cert
+id_*
+credentials.json
+token.json
