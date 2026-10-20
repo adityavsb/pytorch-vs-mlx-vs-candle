@@ -1,0 +1,10 @@
+# Python Machine Learning Engines for Apple Silicon
+torch>=2.2.0
+torchvision>=0.17.0
+mlx>=0.20.0
+mlx-metal>=0.20.0
+
+# Benchmarking & Visualization
+numpy>=1.26.0
+matplotlib>=3.8.0
+tqdm>=4.66.0
