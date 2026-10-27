@@ -1,0 +1,43 @@
+name: CI (Code Integrity & Build Verification - Non-Benchmark)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    name: Build & Smoke Tests (Apple Silicon Runner)
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyyaml
+
+      - name: Run Python Smoke Tests
+        run: |
+          python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Validate README numbers vs results JSON
+        run: |
+          python scripts/check_readme.py
+
+      - name: Build & Test Rust Candle Crate
+        run: |
+          cargo test --manifest-path rust_candle/Cargo.toml
+          cargo build --release --manifest-path rust_candle/Cargo.toml
