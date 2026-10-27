@@ -36,6 +36,8 @@ HF Candle Backend:   candle-core 0.11.0 (Metal Device: 1)
 
 All three frameworks were tested on identical Deep Convolutional Neural Network architectures ($2\times$ `Conv2D` $\rightarrow$ `BatchNorm` $\rightarrow$ `ReLU` $\rightarrow$ `MaxPool` $\rightarrow$ `Dense`):
 
+> **Execution modes:** PyTorch runs eager (`torch.compile` optional); MLX runs under `mx.compile`; Candle dispatches eagerly. The comparison is therefore *default-configuration* per framework, not best-achievable per framework.
+
 ### 1. Throughput & Latency Summary
 
 | Metric | PyTorch (MPS) | Apple MLX (Native) | Candle (Rust Metal) | Winner / Insight |
@@ -67,6 +69,18 @@ All three frameworks were tested on identical Deep Convolutional Neural Network 
 ### 3. Hugging Face Candle in Rust: The Zero-Python Future
 * Candle in Rust demonstrated rock-solid predictability with **zero garbage collection pauses**, compiling into a single standalone binary.
 * While Candle's custom Metal convolution kernels in version `0.11` are not yet as heavily vector-tuned as Apple's proprietary `MPSGraph` library, its ability to run neural networks natively in compiled Rust without a Python interpreter makes it ideal for embedded and systems-level production deployments.
+
+---
+
+## Scope and limitations
+
+* **Workload Characteristics:** The benchmark network executes approximately 8.5 MFLOP per image forward pass (~0.5 TFLOP/s at peak throughput), far below the hardware compute capacity of the Apple M4 GPU.
+* **Dispatch Bound:** This workload is dispatch-bound; results do not transfer to compute-bound models such as ResNet-50 or transformer inference.
+* **Hardware & Runtime Scope:** Measurements are specific to Apple Silicon Unified Memory and macOS Metal frameworks.
+
+## Results file
+
+Complete multi-trial run outputs, per-framework distributions, and system telemetry are exported to [`results/latest.json`](results/latest.json).
 
 ---
 
@@ -126,7 +140,7 @@ let out = conv.forward(&x)?;
 ## How to Reproduce
 
 ### 1. Prerequisites
-Ensure you have Python 3.11+ and the Rust toolchain installed:
+Ensure you have Python 3.13 and Rust 1.99.1 (rustup or Homebrew) installed:
 ```bash
 # Install Rust (if not installed)
 brew install rust

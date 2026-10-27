@@ -6,7 +6,6 @@ __pycache__/
 
 # Rust build artifacts
 target/
-Cargo.lock
 
 # Datasets and model checkpoints
 data/
