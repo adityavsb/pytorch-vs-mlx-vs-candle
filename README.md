@@ -80,6 +80,16 @@ All three frameworks were tested on an identical two-layer convolutional network
 - **Machine state.** One Mac mini (2024, M4, 16 GB), macOS version and framework versions recorded in `results/latest.json`; no thermal control beyond a 10 s idle between frameworks.
 - **Models.** All three models have the same layer sequence (Conv-BN-ReLU-Pool ×2, FC-ReLU-FC) and run BatchNorm in inference mode. The MLX model uses NHWC layout as required by `mlx.nn.Conv2d`; PyTorch and Candle use NCHW.
 
+## Engineering Friction & Where Theory Met Silicon
+
+Real hardware systems reveal architectural friction that theoretical benchmarks obscure:
+
+1. **The Metal Command Buffer Queue Backlog:** In duration-based benchmarking (`>= 2.0s`), unpaced Python CPU loops queued >8,000 passes into the Metal driver queue within 2 seconds. When the barrier fence `torch.mps.synchronize()` was invoked outside the loop, the GPU required over 90 seconds to drain the backlogged queue, distorting throughput calculations. Introducing chunked synchronization (`step_chunk = 20`) pipelined execution while pacing driver dispatch to wall-clock time.
+2. **Why Compiled Rust Trailed Compiled Python on Metal:** Pure Rust eliminates Python runtime overhead, leading us to expect Candle to lead or match MLX. In reality, Candle's Metal backend lowers `conv2d` via an un-fused im2col buffer allocation followed by GEMM (`candle-core/src/metal_backend/mod.rs`). As batch size grows to 512, this un-fused buffer allocation saturates memory bandwidth, causing throughput to fall from 3,069 img/s down to 2,539 img/s. MLX, conversely, traces operations once under `mx.compile` and executes a single fused Metal compute pipeline.
+3. **The 92% Training-Mode Cliff:** In our initial v0.1.0 run, omitting `model.eval()` caused MLX to calculate per-batch running mean and variance reductions on every inference step, cutting throughput by nearly half (`52,385 img/s` vs `101,415 img/s` in eval mode).
+
+> Detailed architectural decisions and rejected alternatives are recorded in [docs/decisions.md](docs/decisions.md).
+
 ## Results file
 
 Complete multi-trial run outputs, per-framework distributions, and system telemetry are exported to [`results/latest.json`](results/latest.json).
@@ -249,6 +259,19 @@ cd ..
 python benchmark_all.py
 ```
 This will automatically execute PyTorch, Apple MLX, and Candle (Rust) over 5 trials, display the comparison table, export `results/latest.json`, and generate `assets/shootout_results.png`.
+
+### 5. Quickstart with Make
+For convenience, common engineering workflows are wrapped in the project `Makefile`:
+```bash
+# Run unit tests (Python & Rust shape parity)
+make test
+
+# Validate that README summary table matches results/latest.json
+make check
+
+# Build release binary and run full 5-trial shootout
+make bench
+```
 
 ---
 
