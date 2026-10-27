@@ -1,9 +1,8 @@
 """
 Apple MLX Benchmark Module on Apple Silicon Unified Memory.
 Measures:
-1. Training and Forward Throughput (images/sec) across batch sizes
+1. Inference (forward-only, no-grad) throughput (images/sec) across batch sizes
 2. Microsecond Inference Latency at Batch Size 1 (P50, P95, P99)
-3. Active GPU Unified Memory Allocation (MB)
 """
 import time
 import numpy as np
@@ -29,8 +28,9 @@ class StandardCNN(nn.Module):
         x = nn.relu(self.fc1(x))
         return self.fc2(x)
 
-def benchmark_mlx_throughput(batch_sizes=[32, 64, 128, 256, 512], iterations=40):
+def benchmark_mlx_throughput(batch_sizes=[32, 64, 128, 256, 512], min_seconds=2.0, min_iters=50):
     model = StandardCNN()
+    model.eval()  # inference-mode BatchNorm: use running stats, no stat updates
     mx.eval(model.parameters())
     
     compiled_model = mx.compile(model)
@@ -45,27 +45,26 @@ def benchmark_mlx_throughput(batch_sizes=[32, 64, 128, 256, 512], iterations=40)
             out = compiled_model(x)
             mx.eval(out)
 
+        n = 0
         start_t = time.perf_counter()
-        for _ in range(iterations):
+        while True:
             out = compiled_model(x)
             mx.eval(out)
+            n += 1
+            if n >= min_iters and (time.perf_counter() - start_t) >= min_seconds:
+                break
         duration = time.perf_counter() - start_t
 
-        total_images = bs * iterations
+        total_images = bs * n
         img_per_sec = total_images / duration
         results[bs] = img_per_sec
-        print(f"  Batch {bs:3d}: {img_per_sec:8.0f} img/s ({duration/iterations*1000:6.2f} ms/step)")
+        print(f"  Batch {bs:3d}: {img_per_sec:8.0f} img/s ({duration/n*1000:6.2f} ms/step, {n} iters in {duration:.2f}s)")
 
-    mem_mb = 0.0
-    if hasattr(mx, "get_active_memory"):
-        mem_mb = mx.get_active_memory() / (1024 * 1024)
-    elif hasattr(mx.metal, "get_active_memory"):
-        mem_mb = mx.metal.get_active_memory() / (1024 * 1024)
-
-    return results, mem_mb
+    return results
 
 def benchmark_mlx_latency_batch1(iterations=500):
     model = StandardCNN()
+    model.eval()
     mx.eval(model.parameters())
     compiled_model = mx.compile(model)
 
