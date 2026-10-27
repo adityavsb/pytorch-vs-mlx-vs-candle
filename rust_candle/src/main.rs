@@ -171,3 +171,22 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{DType, Device, Tensor};
+
+    #[test]
+    fn test_candle_shapes_cpu() -> Result<()> {
+        let device = Device::Cpu;
+        let varmap = VarMap::new();
+        let vs = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+        let model = StandardCNN::new(vs)?;
+        let x = Tensor::randn(0.0f32, 1.0f32, (2, 1, 28, 28), &device)?;
+        let out = model.forward(&x)?;
+        assert_eq!(out.dims(), &[2, 10]);
+        Ok(())
+    }
+}
+

@@ -14,6 +14,8 @@ A reproducible micro-benchmark comparing three deep learning frameworks head-to-
 2. **Apple MLX (Python / C++ Metal):** Apple ML Research's framework engineered from scratch for unified memory zero-copy operations.
 3. **Hugging Face Candle (Rust / Metal):** A minimalist systems-level framework compiled in pure Rust, eliminating Python's GIL and runtime overhead.
 
+> **Note on Methodology & History:** See [CHANGELOG.md](CHANGELOG.md) for the v0.1.0 → v0.2.0 revision details, including an empirical single-variable ablation of each fix.
+
 ---
 
 ## Hardware & Testbench Specifications
