@@ -6,6 +6,7 @@ and outputs a publication-quality comparative visualization.
 import os
 import sys
 import json
+import shutil
 import subprocess
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,7 +17,9 @@ from torch_bench import benchmark_torch_throughput, benchmark_torch_latency_batc
 from mlx_bench import benchmark_mlx_throughput, benchmark_mlx_latency_batch1
 
 def run_candle_rust():
-    cargo_bin = "/opt/homebrew/bin/cargo"
+    cargo_bin = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
+    if not os.path.exists(cargo_bin):
+        raise RuntimeError("cargo not found on PATH or at ~/.cargo/bin; install Rust via rustup or `brew install rust`")
     rust_dir = os.path.join(os.path.dirname(__file__), "rust_candle")
     binary_path = os.path.join(rust_dir, "target", "release", "rust_candle")
 
@@ -35,6 +38,14 @@ def run_candle_rust():
             data = json.loads(json_str)
             break
             
+    if not data:
+        raise RuntimeError(
+            "Candle binary produced no JSON_RESULT line.\n--- stdout ---\n"
+            f"{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+    if "Metal init failed" in result.stderr:
+        raise RuntimeError("Candle fell back to CPU; results would not be comparable:\n" + result.stderr)
+
     # Convert throughput keys to integers
     throughput = {int(k): float(v) for k, v in data.get("throughput", {}).items()}
     latency = data.get("latency_us", {"p50": 0.0, "p95": 0.0, "p99": 0.0})
@@ -50,12 +61,12 @@ def main(output_plot="assets/shootout_results.png"):
 
     # 1. Run PyTorch
     print("\n>>> 1. Benchmarking PyTorch (MPS) <<<")
-    torch_tput, torch_mem = benchmark_torch_throughput(batch_sizes=batch_sizes)
+    torch_tput = benchmark_torch_throughput(batch_sizes=batch_sizes)
     torch_lat = benchmark_torch_latency_batch1()
 
     # 2. Run Apple MLX
     print("\n>>> 2. Benchmarking Apple MLX (GPU) <<<")
-    mlx_tput, mlx_mem = benchmark_mlx_throughput(batch_sizes=batch_sizes)
+    mlx_tput = benchmark_mlx_throughput(batch_sizes=batch_sizes)
     mlx_lat = benchmark_mlx_latency_batch1()
 
     # 3. Run Hugging Face Candle (Rust)
@@ -69,9 +80,9 @@ def main(output_plot="assets/shootout_results.png"):
     print(f"{'Metric':<28} | {'PyTorch (MPS)':<16} | {'Apple MLX':<16} | {'Candle (Rust)':<16}")
     print("-" * 80)
     for bs in batch_sizes:
-        t_val = torch_tput.get(bs, 0.0)
-        m_val = mlx_tput.get(bs, 0.0)
-        c_val = candle_tput.get(bs, 0.0)
+        t_val = torch_tput[bs]
+        m_val = mlx_tput[bs]
+        c_val = candle_tput[bs]
         print(f"Batch {bs:<3} Throughput (img/s)  | {t_val:<16.0f} | {m_val:<16.0f} | {c_val:<16.0f}")
 
     t_p50 = f"{torch_lat['p50']:.1f} μs"
@@ -86,15 +97,10 @@ def main(output_plot="assets/shootout_results.png"):
     m_p99 = f"{mlx_lat['p99']:.1f} μs"
     c_p99 = f"{candle_lat['p99']:.1f} μs"
 
-    t_mem = f"{torch_mem:.1f} MB"
-    m_mem = f"{mlx_mem:.1f} MB"
-    c_mem = "Zero GC (Rust)"
-
     print("-" * 80)
     print(f"{'Batch-1 Latency P50':<28} | {t_p50:<16} | {m_p50:<16} | {c_p50:<16}")
     print(f"{'Batch-1 Latency P95':<28} | {t_p95:<16} | {m_p95:<16} | {c_p95:<16}")
     print(f"{'Batch-1 Latency P99':<28} | {t_p99:<16} | {m_p99:<16} | {c_p99:<16}")
-    print(f"{'GPU Memory Footprint':<28} | {t_mem:<16} | {m_mem:<16} | {c_mem:<16}")
     print("=" * 80)
 
     # 5. Generate Publication-Quality Visualizations
@@ -105,7 +111,7 @@ def main(output_plot="assets/shootout_results.png"):
     x_indices = np.arange(len(batch_sizes))
     axes[0].plot(x_indices, [torch_tput[b] for b in batch_sizes], "o-", label="PyTorch (Apple MPS)", color="#EE4C2C", lw=2.5, ms=8)
     axes[0].plot(x_indices, [mlx_tput[b] for b in batch_sizes], "s-", label="Apple MLX (Native GPU)", color="#0071E3", lw=2.5, ms=8)
-    axes[0].plot(x_indices, [candle_tput.get(b, 0) for b in batch_sizes], "^-", label="Candle (Rust Metal)", color="#FFA500", lw=2.5, ms=8)
+    axes[0].plot(x_indices, [candle_tput[b] for b in batch_sizes], "^-", label="Candle (Rust Metal)", color="#FFA500", lw=2.5, ms=8)
     axes[0].set_title("Throughput Scaling vs. Batch Size (Images / Second)", fontsize=12, fontweight="bold")
     axes[0].set_xlabel("Batch Size", fontsize=11)
     axes[0].set_ylabel("Throughput (Images / Sec)", fontsize=11)

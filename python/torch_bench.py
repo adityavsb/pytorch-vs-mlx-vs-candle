@@ -1,9 +1,8 @@
 """
 PyTorch Benchmark Module on Apple Silicon MPS (Metal Performance Shaders).
 Measures:
-1. Training and Forward Throughput (images/sec) across batch sizes
+1. Inference (forward-only, no-grad) throughput (images/sec) across batch sizes
 2. Microsecond Inference Latency at Batch Size 1 (P50, P95, P99)
-3. Peak GPU Unified Memory Allocation (MB)
 """
 import time
 import numpy as np
@@ -34,7 +33,7 @@ def get_device():
         return torch.device("mps")
     return torch.device("cpu")
 
-def benchmark_torch_throughput(batch_sizes=[32, 64, 128, 256, 512], iterations=40):
+def benchmark_torch_throughput(batch_sizes=[32, 64, 128, 256, 512], min_seconds=2.0, min_iters=50):
     device = get_device()
     model = StandardCNN().to(device)
     model.eval()
@@ -42,6 +41,7 @@ def benchmark_torch_throughput(batch_sizes=[32, 64, 128, 256, 512], iterations=4
     results = {}
     print(f"[PyTorch] Benchmarking Throughput on device: {device}")
 
+    step_chunk = 20
     with torch.no_grad():
         for bs in batch_sizes:
             x = torch.randn(bs, 1, 28, 28, device=device)
@@ -51,23 +51,24 @@ def benchmark_torch_throughput(batch_sizes=[32, 64, 128, 256, 512], iterations=4
             if device.type == "mps":
                 torch.mps.synchronize()
 
+            n = 0
             start_t = time.perf_counter()
-            for _ in range(iterations):
-                _ = model(x)
-            if device.type == "mps":
-                torch.mps.synchronize()
+            while True:
+                for _ in range(step_chunk):
+                    _ = model(x)
+                if device.type == "mps":
+                    torch.mps.synchronize()
+                n += step_chunk
+                if n >= min_iters and (time.perf_counter() - start_t) >= min_seconds:
+                    break
             duration = time.perf_counter() - start_t
 
-            total_images = bs * iterations
+            total_images = bs * n
             img_per_sec = total_images / duration
             results[bs] = img_per_sec
-            print(f"  Batch {bs:3d}: {img_per_sec:8.0f} img/s ({duration/iterations*1000:6.2f} ms/step)")
+            print(f"  Batch {bs:3d}: {img_per_sec:8.0f} img/s ({duration/n*1000:6.2f} ms/step, {n} iters in {duration:.2f}s)")
 
-    mem_mb = 0.0
-    if device.type == "mps" and hasattr(torch.mps, "current_allocated_memory"):
-        mem_mb = torch.mps.current_allocated_memory() / (1024 * 1024)
-
-    return results, mem_mb
+    return results
 
 def benchmark_torch_latency_batch1(iterations=500):
     device = get_device()

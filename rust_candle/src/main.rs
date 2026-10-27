@@ -1,11 +1,16 @@
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use candle_nn::{conv2d, linear, Conv2dConfig, Linear, Module, VarBuilder, VarMap};
+use candle_nn::{
+    batch_norm, conv2d, linear, BatchNorm, BatchNormConfig, Conv2dConfig, Linear, Module,
+    ModuleT, VarBuilder, VarMap,
+};
 use std::time::Instant;
 
 struct StandardCNN {
     conv1: candle_nn::Conv2d,
+    bn1: BatchNorm,
     conv2: candle_nn::Conv2d,
+    bn2: BatchNorm,
     fc1: Linear,
     fc2: Linear,
 }
@@ -17,17 +22,27 @@ impl StandardCNN {
             ..Default::default()
         };
         let conv1 = conv2d(1, 32, 3, conv_cfg, vs.pp("conv1"))?;
+        let bn1 = batch_norm(32, BatchNormConfig::default(), vs.pp("bn1"))?;
         let conv2 = conv2d(32, 64, 3, conv_cfg, vs.pp("conv2"))?;
+        let bn2 = batch_norm(64, BatchNormConfig::default(), vs.pp("bn2"))?;
         let fc1 = linear(64 * 7 * 7, 128, vs.pp("fc1"))?;
         let fc2 = linear(128, 10, vs.pp("fc2"))?;
-        Ok(Self { conv1, conv2, fc1, fc2 })
+        Ok(Self {
+            conv1,
+            bn1,
+            conv2,
+            bn2,
+            fc1,
+            fc2,
+        })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // xs: (B, 1, 28, 28)
-        let xs = self.conv1.forward(xs)?.relu()?;
+        // xs: (B, 1, 28, 28); BatchNorm in inference mode (train = false) to match
+        // torch `model.eval()` and mlx `model.eval()`.
+        let xs = self.bn1.forward_t(&self.conv1.forward(xs)?, false)?.relu()?;
         let xs = xs.max_pool2d(2)?; // (B, 32, 14, 14)
-        let xs = self.conv2.forward(&xs)?.relu()?;
+        let xs = self.bn2.forward_t(&self.conv2.forward(&xs)?, false)?.relu()?;
         let xs = xs.max_pool2d(2)?; // (B, 64, 7, 7)
         let (b, _, _, _) = xs.dims4()?;
         let xs = xs.reshape((b, 64 * 7 * 7))?;
@@ -37,10 +52,19 @@ impl StandardCNN {
     }
 }
 
-fn sync_device(t: &Tensor) -> Result<()> {
-    // Reading data from the tensor forces Apple Metal GPU synchronization
-    let _ = t.flatten_all()?.to_vec1::<f32>()?;
+fn sync_device(device: &Device) -> Result<()> {
+    // Wait for all queued Metal command buffers; no host copy (matches
+    // torch.mps.synchronize() and mx.eval()).
+    device.synchronize()?;
     Ok(())
+}
+
+// Linear interpolation, identical to numpy.percentile(method="linear").
+fn pct(sorted: &[f64], q: f64) -> f64 {
+    let pos = q * (sorted.len() - 1) as f64;
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo as f64)
 }
 
 fn main() -> Result<()> {
@@ -61,7 +85,8 @@ fn main() -> Result<()> {
     let model = StandardCNN::new(vs)?;
 
     let batch_sizes = vec![32, 64, 128, 256, 512];
-    let iterations = 40;
+    let min_seconds = 2.0f64;
+    let min_iters = 50usize;
 
     println!("\n>>> Candle (Rust) Batch Throughput Benchmark <<<");
     let mut throughput_map = serde_json::Map::new();
@@ -72,25 +97,34 @@ fn main() -> Result<()> {
         // Warmup
         for _ in 0..5 {
             let out = model.forward(&x)?;
-            sync_device(&out)?;
+            let _ = out;
+            sync_device(&device)?;
         }
 
+        let mut n = 0usize;
         let start = Instant::now();
-        for _ in 0..iterations {
+        loop {
             let out = model.forward(&x)?;
-            sync_device(&out)?;
+            let _ = out;
+            sync_device(&device)?;
+            n += 1;
+            if n >= min_iters && start.elapsed().as_secs_f64() >= min_seconds {
+                break;
+            }
         }
         let duration = start.elapsed().as_secs_f64();
 
-        let total_imgs = (bs * iterations) as f64;
+        let total_imgs = (bs * n) as f64;
         let img_per_sec = total_imgs / duration;
         throughput_map.insert(bs.to_string(), serde_json::Value::from(img_per_sec));
 
         println!(
-            "  Batch {:3}: {:8.0} img/s ({:6.2} ms/step)",
+            "  Batch {:3}: {:8.0} img/s ({:6.2} ms/step, {} iters in {:.2}s)",
             bs,
             img_per_sec,
-            (duration / iterations as f64) * 1000.0
+            (duration / n as f64) * 1000.0,
+            n,
+            duration
         );
     }
 
@@ -100,21 +134,23 @@ fn main() -> Result<()> {
     // Warmup
     for _ in 0..20 {
         let out = model.forward(&x1)?;
-        sync_device(&out)?;
+        let _ = out;
+        sync_device(&device)?;
     }
 
     let mut latencies_us = Vec::with_capacity(500);
     for _ in 0..500 {
         let t0 = Instant::now();
         let out = model.forward(&x1)?;
-        sync_device(&out)?;
+        let _ = out;
+        sync_device(&device)?;
         latencies_us.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
     }
 
     latencies_us.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let p50 = latencies_us[(latencies_us.len() as f64 * 0.50) as usize];
-    let p95 = latencies_us[(latencies_us.len() as f64 * 0.95) as usize];
-    let p99 = latencies_us[(latencies_us.len() as f64 * 0.99) as usize];
+    let p50 = pct(&latencies_us, 0.50);
+    let p95 = pct(&latencies_us, 0.95);
+    let p99 = pct(&latencies_us, 0.99);
 
     println!(
         "[Candle Batch-1 Latency] P50: {:6.1} μs | P95: {:6.1} μs | P99: {:6.1} μs",
