@@ -1,8 +1,8 @@
 """
 Master Benchmark Orchestrator: PyTorch (MPS) vs. Apple MLX vs. Hugging Face Candle (Rust).
 Runs all 3 frameworks on identical CNN architectures, compares throughput and batch-1 latency
-across multiple trials with rotated framework order, and outputs a publication-quality
-comparative visualization with error bars and machine-readable telemetry.
+across multiple trials with rotated framework order, and outputs a comparative visual
+comparison with error bars and machine-readable telemetry.
 """
 import argparse
 import datetime
@@ -226,7 +226,7 @@ def main():
         json.dump(payload, f, indent=2)
     print(f"\n[✓] Machine-readable results saved to: {os.path.abspath(args.results_json)}")
 
-    # 6. Generate Publication-Quality Visualizations with Error Bars
+    # 6. Generate Comparative Visualizations with Error Bars
     os.makedirs(os.path.dirname(args.output_plot), exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
 
