@@ -275,6 +275,18 @@ make bench
 
 ---
 
+## What I learned
+
+Running this three-framework shootout on the M4 Mac mini challenged several of my initial assumptions about systems-level machine learning:
+
+1. **Compiled Rust does not automatically beat Python on GPU:** I expected Candle in pure compiled Rust to lead across the board by eliminating Python runtime overhead. In reality, on dispatch-bound GPU workloads, framework performance is governed by how effectively operations are lowered to Metal shaders. Candle's Metal backend lowers `conv2d` via an un-fused im2col buffer allocation followed by GEMM, which causes throughput to scale downwards as batch size increases (`3,069 img/s` at batch 32 down to `2,539 img/s` at batch 512 in `results/latest.json`). Apple MLX, by contrast, traces the graph under `mx.compile` and executes a single fused Metal pipeline, reaching `101,415 img/s`.
+2. **The subtleties of asynchronous GPU command buffers:** When transitioning to duration-based loops (`>= 2.0s`), unpaced Python loops queued over 8,000 passes into the Metal driver in two seconds, freezing the GPU for 90 seconds when the barrier fence was finally called. Chunking submissions with `step_chunk = 20` was necessary to pipeline GPU command buffers while keeping driver dispatch paced to wall-clock time.
+3. **The impact of inference vs. training mode:** In early iterations, omitting `model.eval()` in MLX silently triggered dynamic batch statistics reductions on every forward pass, cutting throughput in half (`52,385 img/s` vs `101,415 img/s`). Verifying layer invariants and parameter counts via automated tests is critical before drawing performance conclusions.
+
+If I were continuing this investigation, I would capture Metal System Trace timeline traces in Apple Instruments to inspect hardware threadgroup occupancy and shader stall cycles directly on the M4 GPU cores, and extend the comparison to compute-bound architectures where FLOP density dominates driver overhead.
+
+---
+
 ## References
 
 - A. Hannun, J. Digani, A. Katharopoulos, R. Collobert. *MLX: Efficient and flexible machine learning on Apple silicon*, 2023. https://github.com/ml-explore/mlx
