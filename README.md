@@ -8,9 +8,9 @@
 [![Hardware](https://img.shields.io/badge/Hardware-Apple%20M4%20Mac%20mini-black.svg)](https://support.apple.com/en-us/121555)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-An empirical hardware shootout testing three distinct deep learning paradigms head-to-head on the **Apple M4 Mac mini**:
+A reproducible micro-benchmark comparing three deep learning frameworks head-to-head on the **Apple M4 Mac mini**:
 
-1. **PyTorch (Python / MPS):** The battle-tested industry standard using Apple's Metal Performance Shaders backend.
+1. **PyTorch (Python / MPS):** PyTorch using Apple's Metal Performance Shaders (MPS) backend.
 2. **Apple MLX (Python / C++ Metal):** Apple ML Research's framework engineered from scratch for unified memory zero-copy operations.
 3. **Hugging Face Candle (Rust / Metal):** A minimalist systems-level framework compiled in pure Rust, eliminating Python's GIL and runtime overhead.
 
@@ -58,22 +58,25 @@ All three frameworks were tested on an identical two-layer convolutional network
 
 ## Key Systems Engineering Takeaways
 
-### 1. Apple MLX Latency at Batch Size 1
+### 1. Batch-1 Latency: Compiled MLX Leads Eager PyTorch
 * **Why MLX leads at batch 1 (in this configuration):** The MLX model is run under `mx.compile`, which traces the forward pass once and dispatches a fused kernel graph on each call; PyTorch is run eager, issuing one Metal command encoder per op. The gap therefore measures *compiled MLX vs eager PyTorch*, not MLX vs PyTorch in general. See [MLX Compilation Documentation](https://ml-explore.github.io/mlx/build/html/usage/compile.html).
 
-### 2. PyTorch MPS Throughput Scaling
+### 2. Throughput Scaling: Compiled MLX Leads Across Tested Batch Sizes
 * **Why PyTorch throughput scales:** PyTorch's MPS backend lowers operations to Apple's Metal Performance Shaders Graph framework ([MPSGraph Documentation](https://pytorch.org/docs/stable/notes/mps.html)). Kernel-level behaviour was not profiled with Metal System Trace, and no claim is made about internal MPSGraph shader scheduling.
 
-### 3. Hugging Face Candle (Rust Metal) Characteristics
+### 3. Hugging Face Candle (Rust Metal): Trade-offs in Unfused Systems Deployment
 * **Why Candle trails on throughput:** Candle's Metal `conv2d` is implemented as an im2col transformation followed by a GEMM kernel (`candle-core/src/metal_backend/mod.rs`), dispatched op-by-op without graph fusion; throughput falls as batch size grows, consistent with an im2col buffer that scales with batch size. Candle's primary advantages — a single static binary and no Python runtime — were not timed in this loop.
 
 ---
 
 ## Scope and limitations
 
-* **Workload Characteristics:** The benchmark network executes approximately 8.5 MFLOP per image forward pass (~0.5 TFLOP/s at peak throughput), far below the hardware compute capacity of the Apple M4 GPU.
-* **Dispatch Bound:** This workload is dispatch-bound; results do not transfer to compute-bound models such as ResNet-50 or transformer inference.
-* **Hardware & Runtime Scope:** Measurements are specific to Apple Silicon Unified Memory and macOS Metal frameworks.
+- **Workload.** A two-conv, two-FC network on 28×28 single-channel random inputs (~8.5 MFLOP per image). At the measured throughput the GPU sustains roughly 0.5 TFLOP/s, far below M4 peak: this benchmark is **dispatch-bound**, and results do not transfer to compute-bound models such as ResNet-50 or transformer inference.
+- **Execution modes.** PyTorch eager (and, where shown, `torch.compile`); MLX under `mx.compile`; Candle eager. Framework and compilation mode are confounded unless both PyTorch columns are present.
+- **Repetition.** Every number is the median of 5 trials with min–max in parentheses; the raw per-trial data is in `results/latest.json`. Earlier versions of this README reported a single run.
+- **What was not measured.** Training, backward pass, memory footprint, model loading, multi-model concurrency, larger input sizes, power draw, or any real dataset.
+- **Machine state.** One Mac mini (2024, M4, 16 GB), macOS version and framework versions recorded in `results/latest.json`; no thermal control beyond a 10 s idle between frameworks.
+- **Models.** All three models have the same layer sequence (Conv-BN-ReLU-Pool ×2, FC-ReLU-FC) and run BatchNorm in inference mode. The MLX model uses NHWC layout as required by `mlx.nn.Conv2d`; PyTorch and Candle use NCHW.
 
 ## Results file
 
